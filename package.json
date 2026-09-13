@@ -1,0 +1,19 @@
+{
+  "name": "hokey-hitpay-backend",
+  "version": "1.0.0",
+  "description": "Minimal backend for Hokey Home Care: creates HitPay payment requests, verifies HitPay webhooks, and notifies the store via WhatsApp once an order is paid.",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
