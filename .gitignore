@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Local data store
+orders.json
+
+# OS / editor junk
+.DS_Store
+*.log
