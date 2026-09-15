@@ -1,19 +1,6 @@
 // ---------------------------------------------------------------------------
 // Hokey Home Care — HitPay + WhatsApp backend
 // ---------------------------------------------------------------------------
-// Why this file has to exist at all:
-//  - HitPay requires a secret "Business API Key" to create a payment
-//    request. That key must never reach the customer's browser, so the
-//    website's JS calls THIS server instead, and this server calls HitPay.
-//  - The only trustworthy signal that an order was actually paid is
-//    HitPay's server-to-server webhook (verified below with an HMAC
-//    signature) — never the customer's browser redirecting back to the
-//    site, which anyone could fake by typing a URL.
-//  - Sending a WhatsApp message automatically (without the customer's
-//    phone/app) requires the WhatsApp Business Cloud API and a permanent
-//    access token, which is another secret that has to live on a server.
-// ---------------------------------------------------------------------------
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -38,6 +25,12 @@ const HITPAY_API_BASE =
   HITPAY_ENV === 'live' ? 'https://api.hit-pay.com/v1' : 'https://api.sandbox.hit-pay.com/v1';
 
 const app = express();
+// Render (like most hosts) puts your app behind a reverse proxy that
+// terminates HTTPS and forwards plain HTTP internally. Without this,
+// Express's req.protocol reports "http" even though the real, public URL
+// is "https" — which silently breaks the webhook URL we hand to HitPay
+// below (HitPay can't successfully call an http:// address here).
+app.set('trust proxy', true);
 app.use(
   cors({
     origin: (ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
@@ -45,17 +38,10 @@ app.use(
 );
 app.use(express.json());
 
-// Simple health-check page so uptime monitors (and anyone visiting the
-// bare URL) see a real 200 OK instead of a 404 — the actual API only
-// lives under /api/*.
 app.get('/', (req, res) => {
   res.status(200).send('Hokey backend is running.');
 });
 
-// -----------------------------------------------------------------------
-// 1) Create a HitPay payment request for the customer's cart total.
-//    The frontend redirects the customer to the `url` we return.
-// -----------------------------------------------------------------------
 app.post('/api/create-payment-request', async (req, res) => {
   try {
     const { reference, amount, currency, customer, items, redirect_url } = req.body;
@@ -117,9 +103,6 @@ app.post('/api/create-payment-request', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------
-// 2) HitPay's webhook — this is the ONLY thing that marks an order paid.
-// -----------------------------------------------------------------------
 app.post(
   '/api/webhooks/hitpay',
   express.urlencoded({ extended: true }),
@@ -167,18 +150,11 @@ app.post(
   }
 );
 
-// -----------------------------------------------------------------------
-// 3) Order status lookup — used by the storefront's confirmation page.
-// -----------------------------------------------------------------------
 app.get('/api/orders/:reference', (req, res) => {
   const order = getOrder(req.params.reference);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   return res.json({ status: order.status, reference: order.reference });
 });
-
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
 
 function verifyHitPayHmac(params, receivedHmac, salt) {
   if (!receivedHmac || !salt) return false;
