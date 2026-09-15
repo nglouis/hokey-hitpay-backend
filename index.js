@@ -45,6 +45,13 @@ app.use(
 );
 app.use(express.json());
 
+// Simple health-check page so uptime monitors (and anyone visiting the
+// bare URL) see a real 200 OK instead of a 404 — the actual API only
+// lives under /api/*.
+app.get('/', (req, res) => {
+  res.status(200).send('Hokey backend is running.');
+});
+
 // -----------------------------------------------------------------------
 // 1) Create a HitPay payment request for the customer's cart total.
 //    The frontend redirects the customer to the `url` we return.
@@ -56,12 +63,6 @@ app.post('/api/create-payment-request', async (req, res) => {
     if (!reference || !amount || !customer || !customer.email) {
       return res.status(400).json({ error: 'Missing required order fields.' });
     }
-
-    // NOTE: for a real store, re-derive `amount` from your own product
-    // price list + `items` here instead of trusting the number the browser
-    // sent — otherwise a customer could tamper with the request and pay
-    // less than the real total. Kept simple here since prices live only
-    // in the storefront HTML in this project.
 
     const webhookUrl = `${req.protocol}://${req.get('host')}/api/webhooks/hitpay`;
 
@@ -92,7 +93,7 @@ app.post('/api/create-payment-request', async (req, res) => {
           ? `${redirect_url}?reference=${encodeURIComponent(order.reference)}`
           : undefined,
         webhook: webhookUrl,
-        send_email: true, // HitPay emails the receipt to the customer automatically
+        send_email: true,
         generate_qr: false
       })
     });
@@ -118,12 +119,10 @@ app.post('/api/create-payment-request', async (req, res) => {
 
 // -----------------------------------------------------------------------
 // 2) HitPay's webhook — this is the ONLY thing that marks an order paid.
-//    Verify the HMAC signature against your webhook salt before trusting
-//    anything in the payload (see HitPay's webhook-signing docs).
 // -----------------------------------------------------------------------
 app.post(
   '/api/webhooks/hitpay',
-  express.urlencoded({ extended: true }), // HitPay posts webhooks as form-encoded
+  express.urlencoded({ extended: true }),
   async (req, res) => {
     try {
       const params = { ...req.body };
@@ -136,7 +135,7 @@ app.post(
       }
 
       const reference = params.reference_number;
-      const status = params.status; // e.g. "completed"
+      const status = params.status;
 
       if (!reference) return res.status(400).send('Missing reference_number');
 
@@ -169,8 +168,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------
-// 3) Order status lookup — used by the storefront's confirmation page
-//    after the customer is redirected back from HitPay.
+// 3) Order status lookup — used by the storefront's confirmation page.
 // -----------------------------------------------------------------------
 app.get('/api/orders/:reference', (req, res) => {
   const order = getOrder(req.params.reference);
@@ -182,12 +180,6 @@ app.get('/api/orders/:reference', (req, res) => {
 // Helpers
 // -----------------------------------------------------------------------
 
-// Reproduces HitPay's documented webhook-signing scheme: concatenate every
-// "key"+"value" pair (sorted by key) and HMAC-SHA256 it with your webhook
-// salt, then compare to the `hmac` field HitPay sent. Always re-check this
-// against HitPay's current docs (Settings > Webhooks) before going live —
-// payment-signature schemes are exactly the kind of detail worth
-// double-checking against the source rather than trusting from memory.
 function verifyHitPayHmac(params, receivedHmac, salt) {
   if (!receivedHmac || !salt) return false;
   const sortedKeys = Object.keys(params).sort();
@@ -196,19 +188,10 @@ function verifyHitPayHmac(params, receivedHmac, salt) {
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedHmac));
   } catch {
-    return false; // length mismatch etc.
+    return false;
   }
 }
 
-// Sends the "order paid" notification to the ONE store WhatsApp number,
-// from the ONE business WhatsApp account, via Meta's WhatsApp Cloud API.
-// Requirements this depends on (see server/README.md):
-//  - A WhatsApp Business Platform (Cloud API) number, already set up
-//    through Meta Business Manager.
-//  - Either the recipient (WHATSAPP_TO_NUMBER) has messaged that business
-//    number in the last 24 hours, OR you send an approved message
-//    template (set WHATSAPP_TEMPLATE_NAME) — Meta blocks free-form
-//    business-initiated text outside that 24h window.
 async function notifyStoreOnWhatsApp(order) {
   if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_TO_NUMBER) {
     console.warn('WhatsApp not configured — skipping notification for', order.reference);
@@ -236,12 +219,7 @@ async function notifyStoreOnWhatsApp(order) {
         template: {
           name: WHATSAPP_TEMPLATE_NAME,
           language: { code: 'en' },
-          components: [
-            {
-              type: 'body',
-              parameters: [{ type: 'text', text: messageBody }]
-            }
-          ]
+          components: [{ type: 'body', parameters: [{ type: 'text', text: messageBody }] }]
         }
       }
     : {
@@ -274,8 +252,6 @@ async function notifyStoreOnWhatsApp(order) {
   }
 }
 
-// Sends a plain "new paid order" email to the store owner via Resend,
-// so orders are visible without needing WhatsApp/Meta set up at all.
 async function notifyOwnerByEmail(order) {
   if (!RESEND_API_KEY || !OWNER_EMAIL) {
     console.warn('Resend not configured — skipping owner email for', order.reference);
