@@ -29,7 +29,9 @@ const {
   WHATSAPP_TO_NUMBER,
   WHATSAPP_TEMPLATE_NAME,
   PORT,
-  ALLOWED_ORIGINS
+  ALLOWED_ORIGINS,
+  RESEND_API_KEY,
+  OWNER_EMAIL
 } = process.env;
 
 const HITPAY_API_BASE =
@@ -153,6 +155,11 @@ app.post(
         updateOrderStatus(reference, updated.status, { whatsappNotified: true });
       }
 
+      if (status === 'completed' && !order.ownerEmailNotified) {
+        await notifyOwnerByEmail(updated);
+        updateOrderStatus(reference, updated.status, { ownerEmailNotified: true });
+      }
+
       return res.status(200).send('OK');
     } catch (err) {
       console.error('HitPay webhook handling error:', err);
@@ -264,6 +271,52 @@ async function notifyStoreOnWhatsApp(order) {
     }
   } catch (err) {
     console.error('WhatsApp send error:', err);
+  }
+}
+
+// Sends a plain "new paid order" email to the store owner via Resend,
+// so orders are visible without needing WhatsApp/Meta set up at all.
+async function notifyOwnerByEmail(order) {
+  if (!RESEND_API_KEY || !OWNER_EMAIL) {
+    console.warn('Resend not configured — skipping owner email for', order.reference);
+    return;
+  }
+
+  const itemLines = (order.items || [])
+    .map((i) => `${i.qty}x ${i.name}${i.color ? ` (${i.color})` : ''}`)
+    .join('<br>');
+
+  const html =
+    `<h2>New paid order — ${order.reference}</h2>` +
+    `<p><b>Name:</b> ${order.customer.name}<br>` +
+    `<b>Phone:</b> ${order.customer.phone}<br>` +
+    `<b>Email:</b> ${order.customer.email}<br>` +
+    `<b>Address:</b> ${order.customer.address}</p>` +
+    `<p><b>Items:</b><br>${itemLines}</p>` +
+    `<p><b>Total paid:</b> ${order.currency} ${order.amount}</p>`;
+
+  try {
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'Hokey Orders <onboarding@resend.dev>',
+        to: OWNER_EMAIL,
+        subject: `New order ${order.reference} — ${order.currency} ${order.amount}`,
+        html
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      console.error('Resend email failed:', data);
+    } else {
+      console.log(`Owner email sent for order ${order.reference}`);
+    }
+  } catch (err) {
+    console.error('Resend email error:', err);
   }
 }
 
